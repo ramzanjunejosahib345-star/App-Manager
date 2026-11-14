@@ -1,0 +1,395 @@
+require "import"
+import "android.widget.*"
+import "android.content.*"
+import "android.view.*"
+import "android.os.*"
+import "android.app.*"
+import "android.net.Uri"
+
+-- ================= App Manager =================
+-- Joint Developers: Muhammad Ramzan Qadri & Claude
+-- Apni pasandeeda apps ki list: add, kholna, list se hatana, uninstall karna
+
+local APP_VERSION = "1.3"
+local DEV_WHATSAPP_LINK = "https://wa.me/923000144024"
+local WHATSAPP_GROUP_LINK = "https://chat.whatsapp.com/D6xZRT6trDk1mOJctpYopl"
+local YOUTUBE_LINK = "https://youtube.com/@junejaproduction9565?si=pb_bDA6mau9Jsx4D"
+
+local prefs = service.getSharedPreferences("AppManagerSettings", Context.MODE_PRIVATE)
+local sdk = 0
+pcall(function() sdk = Build.VERSION.SDK_INT end)
+local pm = service.getPackageManager()
+
+local mainDialog, aboutDialog, pickDlg, menuDlg, confirmDlg, reportDlg = nil, nil, nil, nil, nil, nil
+local tvStatus
+local lastError = ""
+local myApps = {}
+
+local function say(t) pcall(function() service.speak(t) end) end
+local function setStatus(t) if tvStatus then pcall(function() tvStatus.setText(t) end) end end
+local function safe(fn)
+  return function(...)
+    local args = {n = select("#", ...), ...}
+    local up = table.unpack or unpack
+    local ok, err = pcall(function() fn(up(args, 1, args.n)) end)
+    if not ok then
+      lastError = tostring(err)
+      setStatus("Error: " .. tostring(err))
+      say("An error occurred. Press SHOW LAST ERROR to copy the details")
+    end
+  end
+end
+local function later(ms, fn)
+  if type(task) == "function" then
+    task(ms, fn)
+  else
+    local h = Handler(Looper.getMainLooper())
+    h.postDelayed(luajava.createProxy("java.lang.Runnable", {run = fn}), ms)
+  end
+end
+local function showDlg(d)
+  pcall(function() d.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY) end)
+  local ok = pcall(function() d.show() end)
+  if not ok then
+    pcall(function()
+      if sdk >= 26 then d.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY)
+      else d.getWindow().setType(WindowManager.LayoutParams.TYPE_SYSTEM_ALERT) end
+      d.show()
+    end)
+  end
+end
+local function dismiss(d) if d then pcall(function() d.dismiss() end) end end
+
+-- ---------- list save / load ----------
+local function saveList()
+  local t = {}
+  for i, a in ipairs(myApps) do t[i] = a.pkg .. "\t" .. (a.label or a.pkg) end
+  pcall(function() prefs.edit().putString("apps", table.concat(t, "\n")).commit() end)
+end
+
+local function labelOf(pkg)
+  local lb = pkg
+  pcall(function()
+    lb = tostring(pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)))
+  end)
+  return lb
+end
+local function installed(pkg)
+  local ok = pcall(function() pm.getApplicationInfo(pkg, 0) end)
+  return ok
+end
+
+-- The saved list is never trimmed by the program. An app leaves the list only when you remove it yourself.
+local function loadList()
+  myApps = {}
+  local s = ""
+  pcall(function() s = tostring(prefs.getString("apps", "") or "") end)
+  local seen = {}
+  for line in s:gmatch("[^\n]+") do
+    local pkg, lb = line:match("^([^\t]+)\t?(.*)$")
+    if pkg and not seen[pkg] then
+      seen[pkg] = true
+      if lb == nil or lb == "" then lb = labelOf(pkg) end
+      myApps[#myApps + 1] = {pkg = pkg, label = lb}
+    end
+  end
+end
+
+-- sari launcher apps
+local function allApps()
+  local list = {}
+  local seen = {}
+  pcall(function()
+    local it = Intent(Intent.ACTION_MAIN, nil)
+    it.addCategory(Intent.CATEGORY_LAUNCHER)
+    local ris = pm.queryIntentActivities(it, 0)
+    for i = 0, tonumber(ris.size()) - 1 do
+      local ri = ris.get(i)
+      local pkg = tostring(ri.activityInfo.packageName)
+      if not seen[pkg] then
+        seen[pkg] = true
+        local lb = pkg
+        pcall(function() lb = tostring(ri.loadLabel(pm)) end)
+        list[#list + 1] = {pkg = pkg, label = lb}
+      end
+    end
+  end)
+  if #list == 0 then
+    pcall(function()
+      local ais = pm.getInstalledApplications(0)
+      for i = 0, tonumber(ais.size()) - 1 do
+        local pkg = tostring(ais.get(i).packageName)
+        if not seen[pkg] and pm.getLaunchIntentForPackage(pkg) ~= nil then
+          seen[pkg] = true
+          list[#list + 1] = {pkg = pkg, label = labelOf(pkg)}
+        end
+      end
+    end)
+  end
+  table.sort(list, function(a, b) return a.label:lower() < b.label:lower() end)
+  return list
+end
+
+local function indexOfPkg(pkg)
+  for i, a in ipairs(myApps) do if a.pkg == pkg then return i end end
+  return nil
+end
+
+local closePlugin
+local showMain
+
+local function openApp(a)
+  local it = nil
+  pcall(function() it = pm.getLaunchIntentForPackage(a.pkg) end)
+  if it == nil then
+    say("This app cannot be opened. It may have been removed")
+    return
+  end
+  closePlugin()
+  local ok = pcall(function() it.addFlags(268435456) service.startActivity(it) end)
+  if not ok then say("Could not open " .. a.label) end
+end
+
+local function confirm(title, msg, yesText, onYes)
+  local b = AlertDialog.Builder(service)
+  b.setTitle(title)
+  b.setMessage(msg)
+  b.setPositiveButton(yesText, {onClick=safe(function() onYes() end)})
+  b.setNegativeButton("NO", nil)
+  dismiss(confirmDlg)
+  confirmDlg = b.create()
+  showDlg(confirmDlg)
+  say(title .. ". " .. msg)
+end
+
+local function removeFromList(a)
+  local i = indexOfPkg(a.pkg)
+  if i then
+    table.remove(myApps, i)
+    saveList()
+    local t = a.label .. " was removed from your list"
+    setStatus(t) say(t)
+    showMain()
+  end
+end
+
+local function uninstallApp(a)
+  local ok = pcall(function()
+    local it = Intent(Intent.ACTION_DELETE, Uri.parse("package:" .. a.pkg))
+    it.addFlags(268435456)
+    service.startActivity(it)
+  end)
+  if not ok then say("Could not open the uninstall screen")
+  else
+    local i = indexOfPkg(a.pkg)
+    say("The phone will now ask you to confirm. Press OK on that screen to uninstall " .. a.label)
+  end
+end
+
+local function appMenu(a)
+  local opts = {"OPEN " .. a.label, "REMOVE FROM MY LIST", "UNINSTALL THIS APP FROM THE PHONE", "MOVE UP", "MOVE DOWN", "APP INFO (SETTINGS)", "BACK"}
+  local lv = ListView(service)
+  lv.setAdapter(ArrayAdapter(service, android.R.layout.simple_list_item_1, opts))
+  local b = AlertDialog.Builder(service)
+  b.setTitle(a.label)
+  b.setView(lv)
+  dismiss(menuDlg)
+  menuDlg = b.create()
+  local d = menuDlg
+  lv.setOnItemClickListener{onItemClick=safe(function(p, v, pos, id)
+    dismiss(d)
+    local o = pos + 1
+    local i = indexOfPkg(a.pkg)
+    if o == 1 then openApp(a)
+    elseif o == 2 then confirm("Remove " .. a.label .. " from your list?", "The app itself stays on your phone. Only the list entry is removed.", "YES, REMOVE", function() removeFromList(a) end)
+    elseif o == 3 then confirm("Uninstall " .. a.label .. "?", "This will delete the app from your phone. The phone will ask once more.", "YES, UNINSTALL", function() uninstallApp(a) end)
+    elseif o == 4 and i and i > 1 then
+      myApps[i], myApps[i - 1] = myApps[i - 1], myApps[i]
+      saveList() say("Moved up") showMain()
+    elseif o == 5 and i and i < #myApps then
+      myApps[i], myApps[i + 1] = myApps[i + 1], myApps[i]
+      saveList() say("Moved down") showMain()
+    elseif o == 6 then
+      pcall(function()
+        local it = Intent("android.settings.APPLICATION_DETAILS_SETTINGS", Uri.parse("package:" .. a.pkg))
+        it.addFlags(268435456)
+        closePlugin()
+        service.startActivity(it)
+      end)
+    end
+  end)}
+  showDlg(d)
+end
+
+-- ---------- Add app ----------
+local function addAppFlow()
+  say("Finding your apps. Please wait")
+  later(80, safe(function()
+    local list = allApps()
+    if #list == 0 then
+      local m = "No apps could be listed. The phone may be hiding the app list from the screen reader app"
+      setStatus(m) say(m)
+      return
+    end
+    local shown = {}
+    local lv = ListView(service)
+    local function refresh(filter)
+      shown = {}
+      local labels = {}
+      local fl = (filter or ""):lower()
+      for _, a in ipairs(list) do
+        if fl == "" or a.label:lower():find(fl, 1, true) then
+          shown[#shown + 1] = a
+          labels[#labels + 1] = a.label .. (indexOfPkg(a.pkg) and " (already in your list)" or "")
+        end
+      end
+      lv.setAdapter(ArrayAdapter(service, android.R.layout.simple_list_item_1, labels))
+    end
+    local box = LinearLayout(service)
+    box.setOrientation(1)
+    local et = EditText(service)
+    et.setHint("Type to search for an app")
+    pcall(function() et.setSingleLine(true) end)
+    box.addView(et)
+    box.addView(lv)
+    refresh("")
+    pcall(function()
+      et.addTextChangedListener(luajava.createProxy("android.text.TextWatcher", {
+        afterTextChanged = function(e) pcall(function() refresh(tostring(e)) end) end,
+        beforeTextChanged = function() end,
+        onTextChanged = function() end}))
+    end)
+    local b = AlertDialog.Builder(service)
+    b.setTitle("Touch an app to add it (" .. #list .. " apps)")
+    b.setView(box)
+    b.setNegativeButton("DONE", {onClick=safe(function() showMain() end)})
+    b.setCancelable(false)
+    dismiss(pickDlg)
+    pickDlg = b.create()
+    lv.setOnItemClickListener{onItemClick=safe(function(p, v, pos, id)
+      local a = shown[pos + 1]
+      if not a then return end
+      if indexOfPkg(a.pkg) then say(a.label .. " is already in your list") return end
+      myApps[#myApps + 1] = {pkg = a.pkg, label = a.label}
+      saveList()
+      say(a.label .. " added. You can add more, or press DONE")
+      refresh(tostring(et.getText()))
+    end)}
+    dismiss(mainDialog) mainDialog = nil
+    showDlg(pickDlg)
+  end))
+end
+
+local function showReport()
+  local dev = ""
+  pcall(function() dev = tostring(Build.MANUFACTURER) .. " " .. tostring(Build.MODEL) end)
+  local t = "App Manager " .. APP_VERSION .. "\nPhone: " .. dev .. "\nAndroid SDK: " .. sdk .. "\nApps in list: " .. #myApps .. "\n\nLast error:\n" .. (lastError ~= "" and lastError or "(none)")
+  local et = EditText(service)
+  et.setText(t)
+  pcall(function() et.setTextIsSelectable(true) end)
+  local sv = ScrollView(service)
+  sv.addView(et)
+  local b = AlertDialog.Builder(service)
+  b.setTitle("Last error report")
+  b.setView(sv)
+  b.setPositiveButton("COPY TEXT", {onClick=safe(function()
+    local cm = service.getSystemService(Context.CLIPBOARD_SERVICE)
+    cm.setPrimaryClip(ClipData.newPlainText("report", t))
+    say("Copied")
+  end)})
+  b.setNegativeButton("Close", nil)
+  dismiss(reportDlg)
+  reportDlg = b.create()
+  showDlg(reportDlg)
+end
+
+local function openLinkAndClose(url)
+  closePlugin()
+  local ok = pcall(function()
+    local intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    service.startActivity(intent)
+  end)
+  if not ok then say("Could not open the link") end
+end
+
+local function showAbout()
+  local builder = AlertDialog.Builder(service)
+  builder.setTitle("About App Manager")
+  local layout = LinearLayout(service)
+  layout.setOrientation(1)
+  layout.setPadding(50, 40, 50, 40)
+  local tv = TextView(service)
+  tv.setTextSize(16)
+  tv.setText("App Name: App Manager\nVersion: " .. APP_VERSION ..
+    "\nDevelopers: Muhammad Ramzan Qadri & Claude\n\nDescription:\nKeep your own list of favourite apps. Add any app to the list, open an app with one touch, remove an app from the list, or uninstall it from the phone.")
+  layout.addView(tv)
+  local b1 = Button(service) b1.setText("Developer Feedback") layout.addView(b1)
+  local b2 = Button(service) b2.setText("Join WhatsApp Group") layout.addView(b2)
+  local b3 = Button(service) b3.setText("Subscribe YouTube Channel") layout.addView(b3)
+  local sv = ScrollView(service)
+  sv.addView(layout)
+  builder.setView(sv)
+  builder.setPositiveButton("OK", nil)
+  aboutDialog = builder.create()
+  b1.setOnClickListener{onClick=safe(function() openLinkAndClose(DEV_WHATSAPP_LINK) end)}
+  b2.setOnClickListener{onClick=safe(function() openLinkAndClose(WHATSAPP_GROUP_LINK) end)}
+  b3.setOnClickListener{onClick=safe(function() openLinkAndClose(YOUTUBE_LINK) end)}
+  showDlg(aboutDialog)
+end
+
+showMain = function()
+  dismiss(mainDialog) dismiss(pickDlg) pickDlg = nil
+  loadList()
+  local builder = AlertDialog.Builder(service)
+  builder.setTitle(#myApps == 0 and "App Manager: the list is empty. Press ADD AN APP" or ("App Manager: " .. #myApps .. " apps"))
+  builder.setCancelable(true)
+  local layout = LinearLayout(service)
+  layout.setOrientation(1)
+  layout.setPadding(40, 20, 40, 20)
+  tvStatus = nil
+  if #myApps > 0 then
+    for i, a in ipairs(myApps) do
+      local ab = Button(service)
+      ab.setText(a.label)
+      pcall(function() ab.setAllCaps(false) end)
+      pcall(function() ab.setContentDescription(a.label .. ", app " .. i .. " of " .. #myApps) end)
+      layout.addView(ab)
+      ab.setOnClickListener{onClick=safe(function() openApp(a) end)}
+      pcall(function()
+        ab.setOnLongClickListener{onLongClick=function(v)
+          pcall(function() appMenu(a) end)
+          return true
+        end}
+      end)
+    end
+  end
+  local bAdd = Button(service)
+  bAdd.setText("ADD AN APP")
+  layout.addView(bAdd)
+  bAdd.setOnClickListener{onClick=safe(function() addAppFlow() end)}
+  local bAbout = Button(service)
+  bAbout.setText("ABOUT")
+  layout.addView(bAbout)
+  bAbout.setOnClickListener{onClick=safe(function() showAbout() end)}
+  local sv = ScrollView(service)
+  sv.addView(layout)
+  builder.setView(sv)
+  mainDialog = builder.create()
+  showDlg(mainDialog)
+end
+
+closePlugin = function()
+  dismiss(aboutDialog) aboutDialog = nil
+  dismiss(pickDlg) pickDlg = nil
+  dismiss(menuDlg) menuDlg = nil
+  dismiss(confirmDlg) confirmDlg = nil
+  dismiss(reportDlg) reportDlg = nil
+  dismiss(mainDialog) mainDialog = nil
+end
+
+local okUI, errUI = pcall(showMain)
+if not okUI then
+  pcall(function() service.speak("Plugin could not start. " .. tostring(errUI)) end)
+end
+return true
