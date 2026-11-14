@@ -1,0 +1,319 @@
+require "import"
+import "android.os.Handler"
+import "android.os.Looper"
+import "java.lang.Runnable"
+import "android.view.accessibility.AccessibilityNodeInfo"
+
+-- WhatsApp group: toggle "Send new messages" between Everyone and Only admins.
+-- Steps: More options -> Group info -> Group permissions -> Send new messages -> switch -> back to the group.
+
+local handler = Handler(Looper.getMainLooper())
+
+local function safeRun(func)
+    local ok, err = pcall(func)
+    return ok
+end
+
+local function setTimeout(ms, action)
+    handler.postDelayed(Runnable{
+        run = function()
+            safeRun(action)
+        end
+    }, ms)
+end
+
+local function say(t)
+    pcall(function() service.speak(t) end)
+end
+
+local function clickNode(node)
+    if not node then return false end
+    local ok, res = pcall(function()
+        if node.isClickable() then
+            return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        end
+        local current = node.getParent()
+        local guard = 0
+        while current and guard < 8 do
+            if current.isClickable() then
+                return current.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            end
+            current = current.getParent()
+            guard = guard + 1
+        end
+        return false
+    end)
+    return ok and res
+end
+
+local function scrollDown()
+    safeRun(function()
+        local root = service.getRootInActiveWindow()
+        if not root then return end
+        local ok = false
+        local scrollableNodes = root.findAccessibilityNodeInfosByViewId("android:id/list")
+        if scrollableNodes and scrollableNodes.size() > 0 then
+            ok = scrollableNodes.get(0).performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+        end
+        if not ok then
+            local count = root.getChildCount()
+            for i = 0, count - 1 do
+                local child = root.getChild(i)
+                if child and child.isScrollable() then
+                    if child.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) then
+                        ok = true
+                        break
+                    end
+                end
+            end
+        end
+        if not ok then
+            root.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+        end
+    end)
+end
+
+local function findAndClick(keywords)
+    local clicked = false
+    safeRun(function()
+        local root = service.getRootInActiveWindow()
+        if not root then return end
+        for _, text in ipairs(keywords) do
+            local list = root.findAccessibilityNodeInfosByText(text)
+            if list and list.size() > 0 then
+                for i = 0, list.size() - 1 do
+                    local node = list.get(i)
+                    if node and node.isVisibleToUser() then
+                        if clickNode(node) then
+                            clicked = true
+                            return
+                        end
+                    end
+                end
+            end
+        end
+    end)
+    return clicked
+end
+
+-- is anything with one of these texts on the screen?
+local function present(keywords)
+    local found = false
+    safeRun(function()
+        local root = service.getRootInActiveWindow()
+        if not root then return end
+        for _, text in ipairs(keywords) do
+            local list = root.findAccessibilityNodeInfosByText(text)
+            if list and list.size() > 0 then
+                for i = 0, list.size() - 1 do
+                    local node = list.get(i)
+                    if node and node.isVisibleToUser() then
+                        found = true
+                        return
+                    end
+                end
+            end
+        end
+    end)
+    return found
+end
+
+-- checked state of the option that has this text (looks at the node, its parent and its children)
+local function isOptionChecked(keywords)
+    local result = nil
+    safeRun(function()
+        local root = service.getRootInActiveWindow()
+        if not root then return end
+        for _, text in ipairs(keywords) do
+            local list = root.findAccessibilityNodeInfosByText(text)
+            if list and list.size() > 0 then
+                for i = 0, list.size() - 1 do
+                    local node = list.get(i)
+                    if node and node.isVisibleToUser() then
+                        local state = nil
+                        pcall(function() if node.isChecked() then state = true end end)
+                        if state == nil then
+                            pcall(function()
+                                local p = node.getParent()
+                                if p and p.isChecked() then state = true end
+                                if state == nil and p then
+                                    for j = 0, p.getChildCount() - 1 do
+                                        local c = p.getChild(j)
+                                        if c and c.isChecked() then state = true end
+                                    end
+                                end
+                                if state == nil and p then
+                                    local gp = p.getParent()
+                                    if gp and gp.isChecked() then state = true end
+                                end
+                            end)
+                        end
+                        if state == nil then
+                            pcall(function()
+                                for j = 0, node.getChildCount() - 1 do
+                                    local c = node.getChild(j)
+                                    if c and c.isChecked() then state = true end
+                                end
+                            end)
+                        end
+                        result = state == true
+                        return
+                    end
+                end
+            end
+        end
+    end)
+    return result
+end
+
+local EVERYONE = {"Everyone", "ہر کوئی", "سب"}
+local ONLYADMINS = {"Only admins", "Only Admins", "صرف ایڈمنز", "صرف منتظمین"}
+local ROW = {"Send new messages", "Send messages", "نئے پیغامات بھیجیں", "پیغامات بھیجیں"}
+local PERMS = {"Group permissions", "Permissions", "گروپ کے اختیارات", "گروپ کی اجازتیں"}
+local INFO = {"Group info", "گروپ کی معلومات", "Group details"}
+local SETTINGS_SCREEN = {"Group permissions", "Send new messages", "Media, links", "Edit group settings", "Exit group"}
+
+-- try fn up to `tries` times, every `gap` ms; then call done(ok)
+local function retry(fn, tries, gap, done)
+    local n = 0
+    local function step()
+        n = n + 1
+        local ok = false
+        safeRun(function() ok = fn(n) end)
+        if ok then
+            done(true)
+        elseif n >= tries then
+            done(false)
+        else
+            setTimeout(gap, step)
+        end
+    end
+    step()
+end
+
+local finalMessage = ""
+
+local function goBackToGroup()
+    local backs = 0
+    local function step()
+        backs = backs + 1
+        service.performGlobalAction(1)
+        setTimeout(900, function()
+            local stillInside = present(SETTINGS_SCREEN)
+            if stillInside and backs < 5 then
+                step()
+            else
+                setTimeout(300, function()
+                    say(finalMessage .. " ڈیولپر محمد رمضان قادری")
+                end)
+            end
+        end)
+    end
+    step()
+end
+
+local function switchOption()
+    retry(function(n)
+        return present(EVERYONE) and present(ONLYADMINS)
+    end, 6, 700, function(found)
+        if not found then
+            finalMessage = "سینڈ نیو میسجز کے آپشن نہیں کھلے۔"
+            goBackToGroup()
+            return
+        end
+        local everyoneOn = isOptionChecked(EVERYONE)
+        local adminsOn = isOptionChecked(ONLYADMINS)
+        local goAdmins
+        if everyoneOn == true then
+            goAdmins = true
+        elseif adminsOn == true then
+            goAdmins = false
+        else
+            goAdmins = true
+        end
+        local clicked
+        if goAdmins then
+            clicked = findAndClick(ONLYADMINS)
+            finalMessage = "اب صرف ایڈمنز میسج بھیج سکتے ہیں۔"
+        else
+            clicked = findAndClick(EVERYONE)
+            finalMessage = "اب ہر کوئی میسج بھیج سکتا ہے۔"
+        end
+        if not clicked then finalMessage = "آپشن پر کلک نہیں ہو سکا۔" end
+        setTimeout(800, function()
+            -- some versions have an OK button in this window
+            safeRun(function()
+                local root = service.getRootInActiveWindow()
+                if not root then return end
+                for _, t in ipairs({"OK", "Ok", "ٹھیک ہے"}) do
+                    local list = root.findAccessibilityNodeInfosByText(t)
+                    if list then
+                        for i = 0, list.size() - 1 do
+                            local node = list.get(i)
+                            local txt = ""
+                            pcall(function() txt = tostring(node.getText()) end)
+                            if node and node.isVisibleToUser() and (txt == "OK" or txt == "Ok" or txt == "ٹھیک ہے") then
+                                clickNode(node)
+                                return
+                            end
+                        end
+                    end
+                end
+            end)
+            setTimeout(800, goBackToGroup)
+        end)
+    end)
+end
+
+local function openRow()
+    retry(function(n)
+        return findAndClick(ROW)
+    end, 5, 800, function(ok)
+        if not ok then
+            finalMessage = "سینڈ نیو میسجز کا آپشن نہیں ملا۔"
+            goBackToGroup()
+            return
+        end
+        setTimeout(1000, switchOption)
+    end)
+end
+
+local function openPermissions()
+    retry(function(n)
+        if findAndClick(PERMS) then return true end
+        scrollDown()
+        return false
+    end, 6, 900, function(ok)
+        if not ok then
+            finalMessage = "گروپ پرمیشنز کا آپشن نہیں ملا۔"
+            goBackToGroup()
+            return
+        end
+        setTimeout(1100, openRow)
+    end)
+end
+
+local function openInfo()
+    retry(function(n)
+        if findAndClick(INFO) then return true end
+        if n == 3 then
+            safeRun(function() service.click({{"Group info", "گروپ کی معلومات"}}) end)
+        end
+        return false
+    end, 5, 700, function(ok)
+        if not ok then
+            finalMessage = "گروپ انفو کا آپشن نہیں ملا۔"
+            goBackToGroup()
+            return
+        end
+        setTimeout(1300, openPermissions)
+    end)
+end
+
+safeRun(function()
+    service.click({{"More options", "مزید اختیارات", "More", "More options popup"}})
+end)
+
+setTimeout(1200, openInfo)
+
+return true
