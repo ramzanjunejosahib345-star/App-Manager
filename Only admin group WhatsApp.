@@ -8,6 +8,8 @@ import "android.view.accessibility.AccessibilityNodeInfo"
 -- Steps: More options -> Group info -> Group permissions -> Send new messages -> switch -> back to the group.
 
 local handler = Handler(Looper.getMainLooper())
+local EVERYONE_WORDS = {"everyone", "all members"}
+local ADMIN_WORDS = {"only admins", "admins only"}
 
 local function safeRun(func)
     local ok, err = pcall(func)
@@ -118,55 +120,80 @@ local function present(keywords)
     return found
 end
 
--- checked state of the option that has this text (looks at the node, its parent and its children)
-local function isOptionChecked(keywords)
+-- Reads which option of the open window is selected. Looks at every checked item on screen and at the texts around it.
+local function nodeTexts(node, depth)
+    local t = ""
+    pcall(function()
+        local x = node.getText()
+        if x ~= nil then t = t .. " " .. tostring(x) end
+    end)
+    pcall(function()
+        local x = node.getContentDescription()
+        if x ~= nil then t = t .. " " .. tostring(x) end
+    end)
+    if depth > 0 then
+        pcall(function()
+            for i = 0, node.getChildCount() - 1 do
+                local c = node.getChild(i)
+                if c then t = t .. nodeTexts(c, depth - 1) end
+            end
+        end)
+    end
+    return t
+end
+
+local function containsAny(text, keywords)
+    local low = string.lower(text)
+    for _, k in ipairs(keywords) do
+        if string.find(low, string.lower(k), 1, true) then return true end
+    end
+    return false
+end
+
+-- returns "everyone", "admins" or nil
+local function detectSelected()
     local result = nil
     safeRun(function()
         local root = service.getRootInActiveWindow()
         if not root then return end
-        for _, text in ipairs(keywords) do
-            local list = root.findAccessibilityNodeInfosByText(text)
-            if list and list.size() > 0 then
-                for i = 0, list.size() - 1 do
-                    local node = list.get(i)
-                    if node and node.isVisibleToUser() then
-                        local state = nil
-                        pcall(function() if node.isChecked() then state = true end end)
-                        if state == nil then
-                            pcall(function()
-                                local p = node.getParent()
-                                if p and p.isChecked() then state = true end
-                                if state == nil and p then
-                                    for j = 0, p.getChildCount() - 1 do
-                                        local c = p.getChild(j)
-                                        if c and c.isChecked() then state = true end
-                                    end
-                                end
-                                if state == nil and p then
-                                    local gp = p.getParent()
-                                    if gp and gp.isChecked() then state = true end
-                                end
-                            end)
+        local checkedTexts = {}
+        local function walk(node, depth)
+            if not node or depth > 14 then return end
+            local isC = false
+            pcall(function() if node.isChecked() then isC = true end end)
+            if isC then
+                -- the text of the checked item itself, or of its row (parent, then grandparent)
+                local t = nodeTexts(node, 2)
+                if not (containsAny(t, EVERYONE_WORDS) or containsAny(t, ADMIN_WORDS)) then
+                    pcall(function()
+                        local p = node.getParent()
+                        if p then t = nodeTexts(p, 2) end
+                        if not (containsAny(t, EVERYONE_WORDS) or containsAny(t, ADMIN_WORDS)) then
+                            local gp = p and p.getParent()
+                            if gp then t = nodeTexts(gp, 3) end
                         end
-                        if state == nil then
-                            pcall(function()
-                                for j = 0, node.getChildCount() - 1 do
-                                    local c = node.getChild(j)
-                                    if c and c.isChecked() then state = true end
-                                end
-                            end)
-                        end
-                        result = state == true
-                        return
-                    end
+                    end)
                 end
+                checkedTexts[#checkedTexts + 1] = t
             end
+            pcall(function()
+                for i = 0, node.getChildCount() - 1 do
+                    walk(node.getChild(i), depth + 1)
+                end
+            end)
+        end
+        walk(root, 0)
+        for _, t in ipairs(checkedTexts) do
+            local a = containsAny(t, ADMIN_WORDS)
+            local e = containsAny(t, EVERYONE_WORDS)
+            if a and not e then result = "admins" return end
+            if e and not a then result = "everyone" return end
         end
     end)
     return result
 end
 
-local EVERYONE = {"Everyone", "ہر کوئی", "سب"}
+local EVERYONE = {"Everyone", "ہر کوئی"}
 local ONLYADMINS = {"Only admins", "Only Admins", "صرف ایڈمنز", "صرف منتظمین"}
 local ROW = {"Send new messages", "Send messages", "نئے پیغامات بھیجیں", "پیغامات بھیجیں"}
 local PERMS = {"Group permissions", "Permissions", "گروپ کے اختیارات", "گروپ کی اجازتیں"}
@@ -221,15 +248,19 @@ local function switchOption()
             goBackToGroup()
             return
         end
-        local everyoneOn = isOptionChecked(EVERYONE)
-        local adminsOn = isOptionChecked(ONLYADMINS)
+        local state = detectSelected()
         local goAdmins
-        if everyoneOn == true then
+        local how = "detected"
+        if state == "everyone" then
             goAdmins = true
-        elseif adminsOn == true then
+        elseif state == "admins" then
             goAdmins = false
         else
-            goAdmins = true
+            -- could not read the selection: do the opposite of what this plugin did last time
+            how = "remembered"
+            local last = ""
+            pcall(function() last = tostring(service.getSharedPreferences("wa_group_toggle", 0).getString("last", "")) end)
+            if last == "admins" then goAdmins = false else goAdmins = true end
         end
         local clicked
         if goAdmins then
@@ -239,7 +270,12 @@ local function switchOption()
             clicked = findAndClick(EVERYONE)
             finalMessage = "اب ہر کوئی میسج بھیج سکتا ہے۔"
         end
-        if not clicked then finalMessage = "آپشن پر کلک نہیں ہو سکا۔" end
+        if not clicked then
+            finalMessage = "آپشن پر کلک نہیں ہو سکا۔"
+        else
+            pcall(function() service.getSharedPreferences("wa_group_toggle", 0).edit().putString("last", goAdmins and "admins" or "everyone").commit() end)
+            if how == "remembered" then finalMessage = finalMessage .. " موجودہ سیٹنگ پڑھی نہیں جا سکی، پچھلی بار کی یاد سے الٹا کیا۔" end
+        end
         setTimeout(800, function()
             -- some versions have an OK button in this window
             safeRun(function()
