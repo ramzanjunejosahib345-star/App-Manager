@@ -1,0 +1,208 @@
+-- KSR_PLUGIN_ID: data_sim_switcher_loader
+-- KSR_VERSION: 1.0
+-- Data SIM Switcher v1.0 - Developer: Muhammad Ramzan Qadri
+-- Pure ASCII file. Updates are kept in the app's private folder, never in the plugin folder.
+SER_UPDATE_URL = "https://raw.githubusercontent.com/ramzanjunejosahib345-star/App-Manager/main/data%20switcher%20code"
+SER_VERSION_URL = "https://raw.githubusercontent.com/ramzanjunejosahib345-star/App-Manager/main/data%20version"
+require "import"
+local service = service or this
+import "java.io.*"
+import "java.lang.Byte"
+import "java.lang.reflect.Array"
+import "java.util.zip.Inflater"
+import "android.os.*"
+local EMB_VER = "1.0"
+local PAYLOAD = {
+"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",
+}
+local function say(t)
+  local ok = pcall(function() service.speak(t) end)
+  if not ok then ok = pcall(function() service.asyncSpeak(t) end) end
+  if not ok then pcall(function() speak(t) end) end
+end
+local function later(ms, fn)
+  if type(task) == "function" then task(ms, fn)
+  else
+    local h = Handler(Looper.getMainLooper())
+    h.postDelayed(luajava.createProxy("java.lang.Runnable", {run = fn}), ms)
+  end
+end
+local function cacheFile()
+  local dir = nil
+  pcall(function() dir = service.getFilesDir() end)
+  if dir == nil then pcall(function() dir = service.getExternalFilesDir(nil) end) end
+  if dir == nil then return nil end
+  return tostring(dir.getAbsolutePath()) .. "/data_sim_switcher_code.lua"
+end
+local function verParts(v)
+  local t = {}
+  for n in tostring(v or ""):gmatch("%d+") do t[#t + 1] = tonumber(n) end
+  return t
+end
+local function isNewer(a, b)
+  local x, y = verParts(a), verParts(b)
+  for i = 1, math.max(#x, #y) do
+    local p, q = x[i] or 0, y[i] or 0
+    if p ~= q then return p > q end
+  end
+  return false
+end
+local function readAll(p)
+  local ok, d = pcall(function()
+    local f = io.open(p, "rb")
+    if not f then return nil end
+    local t = f:read("a")
+    f:close()
+    return t
+  end)
+  if ok then return d end
+  return nil
+end
+local function inflateB64(b64)
+  local data = luajava.bindClass("android.util.Base64").decode(b64, 0)
+  local inf = Inflater()
+  inf.setInput(data)
+  local baos = ByteArrayOutputStream()
+  local buf = Array.newInstance(Byte.TYPE, 65536)
+  local guard = 0
+  while not inf.finished() and guard < 8000 do
+    local n = tonumber(inf.inflate(buf))
+    if n > 0 then baos.write(buf, 0, n)
+    elseif inf.needsInput() or inf.needsDictionary() then break end
+    guard = guard + 1
+  end
+  pcall(function() inf["end"]() end)
+  return tostring(baos.toString("UTF-8"))
+end
+local function embeddedCode()
+  return inflateB64(table.concat(PAYLOAD))
+end
+function SER_EXTRACT(text)
+  local ok, res = pcall(function()
+    local parts = {}
+    for line in tostring(text):gmatch("[^\r\n]+") do
+      local b = line:match('^%s*"([A-Za-z0-9+/=]+)"%s*,?%s*$')
+      if b then parts[#parts + 1] = b end
+    end
+    if #parts == 0 then return nil end
+    return inflateB64(table.concat(parts))
+  end)
+  if ok then return res end
+  return nil
+end
+-- Background update check: downloads quietly, applies the next time the plugin is run.
+local function download(url, onResult)
+  local H = Handler(Looper.getMainLooper())
+  local T = luajava.newInstance("java.lang.Thread", luajava.createProxy("java.lang.Runnable", {run = function()
+    local ok, res = pcall(function()
+      local u = luajava.newInstance("java.net.URL", url .. "?t=" .. tostring(os.time()))
+      local conn = u.openConnection()
+      conn.setConnectTimeout(6000)
+      conn.setReadTimeout(10000)
+      pcall(function() conn.setRequestProperty("User-Agent", "Mozilla/5.0") end)
+      local code = tonumber(conn.getResponseCode())
+      if code ~= 200 then error("HTTP " .. tostring(code)) end
+      local ins = conn.getInputStream()
+      local bo = luajava.newInstance("java.io.ByteArrayOutputStream")
+      local b = Array.newInstance(Byte.TYPE, 16384)
+      local okr, er = pcall(function()
+        while true do
+          local n = tonumber(ins.read(b))
+          if n == nil or n < 0 then break end
+          bo.write(b, 0, n)
+        end
+      end)
+      pcall(function() ins.close() end)
+      if not okr then error(er) end
+      return bo.toByteArray()
+    end)
+    H.post(luajava.createProxy("java.lang.Runnable", {run = function() pcall(function() onResult(ok, res) end) end}))
+  end}))
+  T.start()
+end
+local function toText(bytes)
+  local t = ""
+  pcall(function() t = tostring(luajava.newInstance("java.lang.String", bytes, "UTF-8")) end)
+  return t
+end
+local function currentVersion()
+  local cf = cacheFile()
+  local cached = cf and readAll(cf)
+  if cached and cached:find("KSR_PLUGIN_ID:%s*data_sim_switcher%s") then
+    local cv = cached:match("KSR_VERSION:%s*([%d%.]+)")
+    if cv and isNewer(cv, EMB_VER) then return cv end
+  end
+  return EMB_VER
+end
+local function checkUpdate()
+  if SER_VERSION_URL == "" or SER_UPDATE_URL == "" then return end
+  local mine = currentVersion()
+  download(SER_VERSION_URL, function(ok, res)
+    if not ok then return end
+    local ver = toText(res):match("(%d+[%d%.]*)")
+    if not ver or not isNewer(ver, mine) then return end
+    download(SER_UPDATE_URL, function(ok2, res2)
+      if not ok2 then return end
+      local text = toText(res2)
+      if not text:find("KSR_PLUGIN_ID:%s*data_sim_switcher_loader") then return end
+      local lv = text:match("KSR_VERSION:%s*([%d%.]+)")
+      if lv ~= ver then return end
+      local inner = SER_EXTRACT(text)
+      if not inner then return end
+      local hv = inner:match("KSR_VERSION:%s*([%d%.]+)")
+      if hv ~= ver or not inner:find("KSR_PLUGIN_ID:%s*data_sim_switcher%s") then return end
+      local fn = load(inner, "=data_sim_switcher_new", "t", _ENV)
+      if not fn then return end
+      local cf = cacheFile()
+      if not cf then return end
+      local tmp = cf .. ".tmp"
+      local o = io.open(tmp, "wb")
+      if not o then return end
+      local okw = pcall(function() o:write(inner) o:flush() end)
+      pcall(function() o:close() end)
+      if not okw then pcall(function() os.remove(tmp) end) return end
+      pcall(function() os.remove(cf) end)
+      if os.rename(tmp, cf) then
+        say("Data SIM Switcher update " .. ver .. " is ready. It will work the next time you run the plugin.")
+      end
+    end)
+  end)
+end
+function SER_START()
+  local cf = cacheFile()
+  local cached = cf and readAll(cf)
+  local started = false
+  if cached then
+    local sv = cached:match("KSR_VERSION:%s*([%d%.]+)")
+    if not sv or not isNewer(sv, EMB_VER) then pcall(function() os.remove(cf) end) cached = nil end
+  end
+  if cached and cached:find("KSR_PLUGIN_ID:%s*data_sim_switcher%s") then
+    local cv = cached:match("KSR_VERSION:%s*([%d%.]+)")
+    if cv and isNewer(cv, EMB_VER) then
+      local fn = load(cached, "=data_sim_switcher_update", "t", _ENV)
+      if fn then
+        local ok, err = pcall(fn)
+        if ok then started = true
+        else
+          say("Updated version could not start, using built-in version.")
+          pcall(function() os.remove(cf) end)
+        end
+      end
+    end
+  end
+  if not started then
+    local ok, err = pcall(function()
+      local fn, e = load(embeddedCode(), "=data_sim_switcher", "t", _ENV)
+      if not fn then error("load failed: " .. tostring(e)) end
+      fn()
+    end)
+    if not ok then say("Plugin could not start. " .. tostring(err)) end
+  end
+  pcall(function() later(6000, function() pcall(checkUpdate) end) end)
+end
+SER_START()
