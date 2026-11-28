@@ -1,0 +1,208 @@
+-- KSR_PLUGIN_ID: mobile_data_toggle_loader
+-- KSR_VERSION: 1.0
+-- Mobile Data Toggle v1.0 - Developer: Muhammad Ramzan Qadri
+-- Pure ASCII file. Updates are kept in the app's private folder, never in the plugin folder.
+SER_UPDATE_URL = "https://raw.githubusercontent.com/ramzanjunejosahib345-star/App-Manager/main/mobile%20data%20code"
+SER_VERSION_URL = "https://raw.githubusercontent.com/ramzanjunejosahib345-star/App-Manager/main/mobile%20data%20version"
+require "import"
+local service = service or this
+import "java.io.*"
+import "java.lang.Byte"
+import "java.lang.reflect.Array"
+import "java.util.zip.Inflater"
+import "android.os.*"
+local EMB_VER = "1.0"
+local PAYLOAD = {
+"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",
+}
+local function say(t)
+  local ok = pcall(function() service.speak(t) end)
+  if not ok then ok = pcall(function() service.asyncSpeak(t) end) end
+  if not ok then pcall(function() speak(t) end) end
+end
+local function later(ms, fn)
+  if type(task) == "function" then task(ms, fn)
+  else
+    local h = Handler(Looper.getMainLooper())
+    h.postDelayed(luajava.createProxy("java.lang.Runnable", {run = fn}), ms)
+  end
+end
+local function cacheFile()
+  local dir = nil
+  pcall(function() dir = service.getFilesDir() end)
+  if dir == nil then pcall(function() dir = service.getExternalFilesDir(nil) end) end
+  if dir == nil then return nil end
+  return tostring(dir.getAbsolutePath()) .. "/mobile_data_toggle_code.lua"
+end
+local function verParts(v)
+  local t = {}
+  for n in tostring(v or ""):gmatch("%d+") do t[#t + 1] = tonumber(n) end
+  return t
+end
+local function isNewer(a, b)
+  local x, y = verParts(a), verParts(b)
+  for i = 1, math.max(#x, #y) do
+    local p, q = x[i] or 0, y[i] or 0
+    if p ~= q then return p > q end
+  end
+  return false
+end
+local function readAll(p)
+  local ok, d = pcall(function()
+    local f = io.open(p, "rb")
+    if not f then return nil end
+    local t = f:read("a")
+    f:close()
+    return t
+  end)
+  if ok then return d end
+  return nil
+end
+local function inflateB64(b64)
+  local data = luajava.bindClass("android.util.Base64").decode(b64, 0)
+  local inf = Inflater()
+  inf.setInput(data)
+  local baos = ByteArrayOutputStream()
+  local buf = Array.newInstance(Byte.TYPE, 65536)
+  local guard = 0
+  while not inf.finished() and guard < 8000 do
+    local n = tonumber(inf.inflate(buf))
+    if n > 0 then baos.write(buf, 0, n)
+    elseif inf.needsInput() or inf.needsDictionary() then break end
+    guard = guard + 1
+  end
+  pcall(function() inf["end"]() end)
+  return tostring(baos.toString("UTF-8"))
+end
+local function embeddedCode()
+  return inflateB64(table.concat(PAYLOAD))
+end
+function SER_EXTRACT(text)
+  local ok, res = pcall(function()
+    local parts = {}
+    for line in tostring(text):gmatch("[^\r\n]+") do
+      local b = line:match('^%s*"([A-Za-z0-9+/=]+)"%s*,?%s*$')
+      if b then parts[#parts + 1] = b end
+    end
+    if #parts == 0 then return nil end
+    return inflateB64(table.concat(parts))
+  end)
+  if ok then return res end
+  return nil
+end
+-- Background update check: downloads quietly, applies the next time the plugin is run.
+local function download(url, onResult)
+  local H = Handler(Looper.getMainLooper())
+  local T = luajava.newInstance("java.lang.Thread", luajava.createProxy("java.lang.Runnable", {run = function()
+    local ok, res = pcall(function()
+      local u = luajava.newInstance("java.net.URL", url .. "?t=" .. tostring(os.time()))
+      local conn = u.openConnection()
+      conn.setConnectTimeout(6000)
+      conn.setReadTimeout(10000)
+      pcall(function() conn.setRequestProperty("User-Agent", "Mozilla/5.0") end)
+      local code = tonumber(conn.getResponseCode())
+      if code ~= 200 then error("HTTP " .. tostring(code)) end
+      local ins = conn.getInputStream()
+      local bo = luajava.newInstance("java.io.ByteArrayOutputStream")
+      local b = Array.newInstance(Byte.TYPE, 16384)
+      local okr, er = pcall(function()
+        while true do
+          local n = tonumber(ins.read(b))
+          if n == nil or n < 0 then break end
+          bo.write(b, 0, n)
+        end
+      end)
+      pcall(function() ins.close() end)
+      if not okr then error(er) end
+      return bo.toByteArray()
+    end)
+    H.post(luajava.createProxy("java.lang.Runnable", {run = function() pcall(function() onResult(ok, res) end) end}))
+  end}))
+  T.start()
+end
+local function toText(bytes)
+  local t = ""
+  pcall(function() t = tostring(luajava.newInstance("java.lang.String", bytes, "UTF-8")) end)
+  return t
+end
+local function currentVersion()
+  local cf = cacheFile()
+  local cached = cf and readAll(cf)
+  if cached and cached:find("KSR_PLUGIN_ID:%s*mobile_data_toggle%s") then
+    local cv = cached:match("KSR_VERSION:%s*([%d%.]+)")
+    if cv and isNewer(cv, EMB_VER) then return cv end
+  end
+  return EMB_VER
+end
+local function checkUpdate()
+  if SER_VERSION_URL == "" or SER_UPDATE_URL == "" then return end
+  local mine = currentVersion()
+  download(SER_VERSION_URL, function(ok, res)
+    if not ok then return end
+    local ver = toText(res):match("(%d+[%d%.]*)")
+    if not ver or not isNewer(ver, mine) then return end
+    download(SER_UPDATE_URL, function(ok2, res2)
+      if not ok2 then return end
+      local text = toText(res2)
+      if not text:find("KSR_PLUGIN_ID:%s*mobile_data_toggle_loader") then return end
+      local lv = text:match("KSR_VERSION:%s*([%d%.]+)")
+      if lv ~= ver then return end
+      local inner = SER_EXTRACT(text)
+      if not inner then return end
+      local hv = inner:match("KSR_VERSION:%s*([%d%.]+)")
+      if hv ~= ver or not inner:find("KSR_PLUGIN_ID:%s*mobile_data_toggle%s") then return end
+      local fn = load(inner, "=mobile_data_toggle_new", "t", _ENV)
+      if not fn then return end
+      local cf = cacheFile()
+      if not cf then return end
+      local tmp = cf .. ".tmp"
+      local o = io.open(tmp, "wb")
+      if not o then return end
+      local okw = pcall(function() o:write(inner) o:flush() end)
+      pcall(function() o:close() end)
+      if not okw then pcall(function() os.remove(tmp) end) return end
+      pcall(function() os.remove(cf) end)
+      if os.rename(tmp, cf) then
+        say("Mobile Data Toggle update " .. ver .. " is ready. It will work the next time you run the plugin.")
+      end
+    end)
+  end)
+end
+function SER_START()
+  local cf = cacheFile()
+  local cached = cf and readAll(cf)
+  local started = false
+  if cached then
+    local sv = cached:match("KSR_VERSION:%s*([%d%.]+)")
+    if not sv or not isNewer(sv, EMB_VER) then pcall(function() os.remove(cf) end) cached = nil end
+  end
+  if cached and cached:find("KSR_PLUGIN_ID:%s*mobile_data_toggle%s") then
+    local cv = cached:match("KSR_VERSION:%s*([%d%.]+)")
+    if cv and isNewer(cv, EMB_VER) then
+      local fn = load(cached, "=mobile_data_toggle_update", "t", _ENV)
+      if fn then
+        local ok, err = pcall(fn)
+        if ok then started = true
+        else
+          say("Updated version could not start, using built-in version.")
+          pcall(function() os.remove(cf) end)
+        end
+      end
+    end
+  end
+  if not started then
+    local ok, err = pcall(function()
+      local fn, e = load(embeddedCode(), "=mobile_data_toggle", "t", _ENV)
+      if not fn then error("load failed: " .. tostring(e)) end
+      fn()
+    end)
+    if not ok then say("Plugin could not start. " .. tostring(err)) end
+  end
+  pcall(function() later(6000, function() pcall(checkUpdate) end) end)
+end
+SER_START()
